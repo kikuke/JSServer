@@ -1,36 +1,33 @@
 #include <errno.h>
 #include "jsmanager.h"
 
-void js_server(int serv_sock, int stun_sock, int epfd, struct epoll_event *ep_events);
+void js_server(int stun_sock, int epfd, struct epoll_event *ep_events);
 
 int main(void)
 {
-	int serv_sock, stun_sock;
+	int stun_sock;
 	int epfd;
 	struct epoll_event *ep_events;
 
-	js_set_sock(&serv_sock, &stun_sock);
-	js_set_epoll(serv_sock, &epfd, ep_events);
+	js_set_sock(&stun_sock);
+	js_set_epoll(stun_sock, &epfd, ep_events);
 
-	js_server(serv_sock, stun_sock, epfd, ep_events);
+	js_server(stun_sock, epfd, ep_events);
 
 	return 0;
 }
 
 
-void js_server(int serv_sock, int stun_sock, int epfd, struct epoll_event *ep_events)
+void js_server(int stun_sock, int epfd, struct epoll_event *ep_events)
 {
 	struct epoll_event event;
 	int event_cnt, i;
 
-	int tcp_host_sock = -1;
-	int udp_host_sock = -1;
-	struct sockaddr_in udp_host_addr;
+	struct sockaddr_in clnt_addr;
+	int clnt_sz;
 
-	int clnt_cnt = 0;
-	int tcp_clnt_socks[MAX_CLIENT];
-	char buf[TCP_BUF_SIZE];
-	int str_len, len;
+	int iResult;
+	char stun_buf[UDP_BUF_SIZE];
 
 	puts("\n#####\nServer Start...\n#####\n");
 
@@ -45,36 +42,37 @@ void js_server(int serv_sock, int stun_sock, int epfd, struct epoll_event *ep_ev
 
 		for(i=0; i<event_cnt; i++)
 		{
-			if(ep_events[i].data.fd==serv_sock)
-				js_accept_manage(serv_sock, stun_sock, &tcp_host_sock, tcp_clnt_socks, &udp_host_sock, &udp_host_addr, epfd, &clnt_cnt);
-			else
-			{
-				str_len=0;
+			clnt_sz = sizeof(clnt_addr);
+			iResult = recvfrom(ep_events[i].data.fd, stun_buf, UDP_BUF_SIZE, 0, (struct sockaddr*)&clnt_addr, &clnt_sz);
+			
+			if(iResult > 0){
+				int id = stun_buf[0];
+				int j;
 
-				while(1)
-				{
-					len = read(ep_events[i].data.fd, &buf[str_len], TCP_BUF_SIZE - str_len);
-					
-					if(len==0)
+				for(j=0; j<map_cnt; j++)
+					if(map_index[j]==id)
 					{
-						if(tcp_host_sock==ep_events[i].data.fd)
-						{//호스트, 클라이언트가 나갈경우 구현하기
-						}
+						SendResponse(stun_sock, map_addr[j], clnt_addr);
+						SendResponse(stun_sock, clnt_addr, map_addr[j]);
+					
+						printf("\n###\nLinked ID: %d\nEndpoint1 - IP: %s Port: %d\nEndpoint2 - IP: %s Port: %d\n###\n", id, inet_ntoa(map_addr[j].sin_addr), ntohs(map_addr[j].sin_port), inet_ntoa(clnt_addr.sin_addr), ntohs(clnt_addr.sin_port));
+
+						j=-1;
+						break;
 					}
-					else if(len<0)
-						if(errno==EAGAIN)
-						{
-							js_tcp_read(str_len, buf);
+				
+				if(j!=-1)
+				{
+					map_index[map_cnt]=id;
+					map_addr[map_cnt]=clnt_addr;
+					map_cnt++;
 
-							break;
-						}
-
-					str_len+=len;
+					printf("\n###\nRegistered ID: %d\nIP: %s Port: %d\n###\n", id, inet_ntoa(map_addr[map_cnt-1].sin_addr), ntohs(map_addr[map_cnt-1].sin_port));
 				}
 			}
 		}
 	}
 
-	close(serv_sock); close(epfd);
+	close(stun_sock); close(epfd);
 	return;
 }
